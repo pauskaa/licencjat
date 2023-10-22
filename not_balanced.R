@@ -16,13 +16,19 @@ library(caret)
 library(ggcorrplot)
 library(ROCR)
 
+#wgranie danych, dane pochodzą z 2021 BRFSS Survey https://www.cdc.gov/brfss/annual_data/annual_2021.html 
+
 df <- read_xpt("dane_sas/2021.xpt", col_select = c(DIABETE4, SEXVAR, GENHLTH, PHYSHLTH,
                                                    MEDCOST1, EXERANY2,"_RFHYPE6" ,"_RFCHOL3" , CVDSTRK3, "_MICHD", ASTHMA3,  ADDEPEV3,
                                                   EDUCA, INCOME3, DIFFWALK, "_SMOKER3","_URBSTAT", "_IMPRACE","_HLTHPLN","_AGEG5YR",
                                                    "_BMI5CAT","_RFDRHV7", "_FRTLT1A", "_VEGLT1A", "FRNCHDA_"))
 
+#usunięcie braków danych 
+
 df <- as.data.frame(df)
 df <- na.omit(df)
+
+#zmiana nazwy kolumn 
 
 colnames(df)[colnames(df)=="DIABETE4"] = "diabetes"
 colnames(df)[colnames(df)=="SEXVAR"] = "sex"
@@ -50,6 +56,8 @@ colnames(df)[colnames(df)=="_FRTLT1A"] = "fruit"
 colnames(df)[colnames(df)=="_VEGLT1A"] = "veggie"
 colnames(df)[colnames(df)=="FRNCHDA_"] = "fries"
 
+##PRZYGOTOWANIE DANYCH
+
 #cukrzyca
 df <- df[df$diabetes !=7,] #dont know
 df <- df[df$diabetes !=9,] #refused
@@ -57,6 +65,7 @@ df <- df[df$diabetes !=4,] #prediabetes
 df$diabetes[df$diabetes == 3] <- 0 #in pregnancy
 df$diabetes[df$diabetes == 2] <- 0 #no diabetes
 summary(df$diabetes)
+
 #płeć
 df$sex[df$sex == 2] <- 0 #kobieta
 df <- df[df$sex !=7,] #dont know
@@ -68,7 +77,6 @@ df$sex <-as.numeric(df$sex)
 df <- df[df$genhealth !=7,] #dont know
 df <- df[df$genhealth !=9,] #refused
 summary(df$genhealth)
-
 
 #zdrowie fizyczne - ilość dni ze złym stanem
 df$physhealth[df$physhealth == 88] <- 0 #no days
@@ -149,7 +157,6 @@ df$urban[df$urban == 2] <- 0 #no
 summary(df$urban)
 
 #rasa
-
 df$race[df$race == 1] <- "white"
 df$race[df$race == 2] <- "black"
 df$race[df$race == 3] <- "asian"
@@ -166,7 +173,7 @@ summary(df$insurance)
 #wiek
 df <- df[df$age != 14,] #missing
     
- #bmi
+#bmi
 summary(df$bmi)
     
 #alkohol
@@ -191,6 +198,7 @@ df$fries[df$fries < 0.25] <- 0
 df$fries[df$fries >= 0.25] <- 1
 summary(df$fries)
 
+##BUDOWA MODELI
 
 #podział na zbiór treningowy i testowy 
 set.seed(3)
@@ -200,7 +208,7 @@ training <- df[ inTraining,]
 testing  <- df[-inTraining,]
 summary(training)
 
-#walidacka krzyzowa 
+#pięciokrotna walidacja krzyzowa 
 fitControl <- trainControl(
   method = "cv",
   number = 5)
@@ -218,7 +226,6 @@ summary(model_log)
 model_step <- stepAIC(model_log, direction="both", trace = FALSE)
 summary(model_step)
 
-
 #drzewo 
 tree <- train(diabetes ~ ., data = training, 
               method = "rpart", 
@@ -230,22 +237,14 @@ rf <- randomForest(diabetes ~.,
                    data = training)
 varImpPlot(rf)
 
-#wykres zmienna objaśniająca
-ggplot(df, 
-       aes(x = as.factor(df$veggie), y = ..count.. /sum(..count..),
-           fill = diabetes)) + 
-  geom_bar(position = "stack") +
-  labs(x ="veggie", y ="Procent", title ="Rozkład zmiennej veggie") + scale_y_continuous(labels = scales::percent)
-
 #macirrz korelacji 
 df2 <- dplyr::select_if(df, is.numeric)
 r <- cor(df2, use="complete.obs")
 ggcorrplot(r, hc.order = TRUE, type = "lower", lab = TRUE)
 
-x<-table(predict(rf, new = testing), testing$diabetes)
+##EWALUACJA MODELI
 
-### Regresje
-
+#macierze pomyłek 
 cm1 <- table(ifelse(predict(model_log, newdata = testing, type = "response") > 0.5, 1, 0), testing$diabetes)
 confusionMatrix(cm1)
 cm2 <- table(ifelse(predict(model_step, newdata = testing, type = "response") > 0.5, 1, 0),testing$diabetes)
@@ -270,7 +269,7 @@ roc_tree <- as.vector(roc_tree[,2])
 roc_rf <- predict(rf, newdata = testing, type = "prob")
 roc_rf <- as.vector(roc_rf[,2])
 
-#krzywa ROC
+#krzywa ROC wizualizacja 
 pred <- prediction(roc_step, testing$diabetes)
 perf <- performance(pred ,"tpr","fpr")
 plot(perf, lwd=2, col ="blue")
@@ -292,7 +291,8 @@ auc_step <- (performance(prediction(roc_step, testing$diabetes), "auc")@y.values
 auc_tree <- (performance(prediction(roc_tree, testing$diabetes), "auc")@y.values[[1]])
 auc_rf <- (performance(prediction(roc_rf, testing$diabetes), "auc")@y.values[[1]])
 
-##drugi zbiór zbalansowany
+##BALANSOWANIE ZBIORU 
+
 df_balanced <- ovun.sample(diabetes~., data=df, method = "both",
                            p = 0.5,
                            seed = 222)$data
@@ -314,13 +314,6 @@ barplot(prop.table(table(training2$diabetes)),
         ylim = c(0, 1),
         main = "Rozkład zmiennej objaśnianej")
 
-#wykres objaśniajace
-ggplot(df_balanced, 
-       aes(x = as.factor(veggie), y = ..count.. /sum(..count..),
-           fill = diabetes)) + 
-  geom_bar(position = "stack") +
-  labs(x ="veggie", y ="Procent", title ="Rozkład zmiennej veggie") + scale_y_continuous(labels = scales::percent)
-
 #model logitowy 
 model_log <- glm(diabetes~., data = training2, family = 'binomial')
 summary(model_log)
@@ -340,17 +333,16 @@ rf <- randomForest(diabetes ~.,
                    data = training2)
 varImpPlot(rf)
 
+##WALIDACJA WYNIKOW DLA ZBIORU ZBALANSOWANEGO
+
 #macierze bledow
 
-### model logitowy 
 cm1 <- table(ifelse(predict(model_log, newdata = testing2, type = "response") > 0.5, 1, 0), testing2$diabetes)
 confusionMatrix(cm1)
 cm2 <- table(ifelse(predict(model_step, newdata = testing2, type = "response") > 0.5, 1, 0),testing2$diabetes)
 confusionMatrix(cm2)
-### Drzewa
 cm3 <- table(predict(tree, new = testing2, type = "raw"), testing2$diabetes)
 confusionMatrix(cm3)
-### Las
 cm4 <- table(predict(rf, new = testing2, type = "class"), testing2$diabetes)
 confusionMatrix(cm4)
 
@@ -383,6 +375,7 @@ pred4 <- prediction(roc_rf, testing2$diabetes)
 perf4 <- performance(pred4 ,"tpr","fpr")
 plot(perf4, lwd = 2, col ="violet", add = TRUE)
 
+#AUC
 auc_log <- (performance(prediction(roc_log, testing2$diabetes), "auc")@y.values[[1]])
 auc_step <- (performance(prediction(roc_step, testing2$diabetes), "auc")@y.values[[1]])
 auc_tree <- (performance(prediction(roc_tree, testing2$diabetes), "auc")@y.values[[1]])
